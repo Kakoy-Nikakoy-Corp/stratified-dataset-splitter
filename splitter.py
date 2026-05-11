@@ -1,69 +1,58 @@
-from copy import deepcopy
+from functools import reduce
 
 
-def calculate_cost(candidate, target_samples, target_pos, weights):
-    cost = 0.0
+def gain(current, delta, target):
+    if target == 0:
+        return 0
 
-    for i in range(3):
-        s = candidate[i]["total"]
-        p = candidate[i]["pos"]
-
-        ts, tp = target_samples[i], target_pos[i]
-
-        # Штрафуем несоответствие размеру фолда
-        cost += weights[0] * ((s - ts) / ts) ** 2
-
-        # Штрафуем дисбаланс позитивных сэмплов
-        if tp > 0:
-            cost += weights[1] * ((p - tp) / tp) ** 2
-
-    return cost
+    return -delta * (2 * (current - target) + delta) / target**2
 
 
-def greedy_loc_split(total_samples, total_pos, location_data, split, weights):
-    pos_rate = total_pos / total_samples
-
-    target_samples = [total_samples * ratio for ratio in split]
-    target_pos = [ts * pos_rate for ts in target_samples]
+def greedy_loc_split(location_data, split, weights):
+    total_samples, total_pos = reduce(
+        lambda x, y: [x[0] + y[0], x[1] + y[1]], location_data.values()
+    )
 
     # Сначала распределяем локации с наибольшим числом позитивных сэмплов
-    locations = sorted(location_data.items(), key=lambda x: x[1]["pos"], reverse=True)
+    locations = sorted(location_data.items(), key=lambda x: x[1][1], reverse=True)
 
-    folds = [{"total": 0, "pos": 0, "count": 0} for _ in range(3)]
+    folds = [{"samples": 0, "pos": 0, "loc_count": 0} for _ in range(3)]
 
     mapping = {}
     fold_names = ["train", "val", "test"]
 
     # Для каждой локации пробуем положить её по очереди в каждый фолд
     for loc_name, data in locations:
-        n_samples = data["total"]
-        n_pos = data["pos"]
+        ds, dp = data
 
         best_fold = None
-        best_cost = float("inf")
+        best_gain = float("-inf")
 
         for i in range(3):
+            target_s = total_samples * split[i]
+            target_p = total_pos * split[i]
+
             # Ограничение: пропускаем фолд, если локация занимает более четверти его объёма
-            if n_samples > target_samples[i] * 0.25:
+            if ds > target_s * 0.25:
                 continue
 
-            candidate = deepcopy(folds)
-            candidate[i]["total"] += n_samples
-            candidate[i]["pos"] += n_pos
+            s = folds[i]["samples"]
+            p = folds[i]["pos"]
 
-            # Находим штраф при использовании такого варианта распределения
-            cost = calculate_cost(candidate, target_samples, target_pos, weights)
+            # Находим "прирост корректности" при использовании такого варианта распределения
+            total_gain = (weights[0] * gain(s, ds, target_s)
+                          + weights[1] * gain(p, dp, target_p))
 
-            if cost < best_cost:
-                best_cost = cost
+            if total_gain > best_gain:
+                best_gain = total_gain
                 best_fold = i
 
-        # Выбираем фолд, при попадании в который локация минимизирует штраф
+        # Выбираем фолд, при попадании в который локация максимизирует прирост
         mapping[loc_name] = fold_names[best_fold]
 
-        folds[best_fold]["total"] += n_samples
-        folds[best_fold]["pos"] += n_pos
-        folds[best_fold]["count"] += 1
+        folds[best_fold]["samples"] += ds
+        folds[best_fold]["pos"] += dp
+        folds[best_fold]["loc_count"] += 1
 
     print(folds)
     return mapping

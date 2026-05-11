@@ -9,43 +9,49 @@ import requests
 from PIL import Image
 from tqdm import tqdm
 
+from config import (
+    DATASET_PATH,
+    EXPORT_PATH,
+    GAIN_WEIGHTS,
+    NEW_URL,
+    OLD_URL,
+    SPLIT_RATIO,
+    YOLO_CONF,
+)
 from splitter import greedy_loc_split
 
-EXPORT_PATH = Path('./data/label-studio-export.json')
-DATASET_PATH = Path('./data/dataset.ndjson')
-OLD_URL = 'http://192.168.0.104:1337'
-NEW_URL = 'https://barstatic.oops.wtf'
+
+def encode(p):
+    return hashlib.sha1(str(p).encode()).hexdigest()
+
 
 tasks = json.load(open(EXPORT_PATH, encoding="utf-8"))
 
-loc_data = defaultdict(lambda: {"total": 0, "pos": 0})
-total_pos = 0
+loc_data = defaultdict(lambda: [0, 0])
 for task in tqdm(tasks):
-    task_id = task["id"]
     url = task["image"].replace(OLD_URL, NEW_URL)
     path = Path(urlparse(url).path)
 
-    loc_hash = hashlib.sha1(
-        str(path.parent).encode(), usedforsecurity=False
-    ).hexdigest()
+    img_hash = encode(path)
+    loc_hash = encode(path.parent)
     task["loc_hash"] = loc_hash
 
-    loc_data[loc_hash]["total"] += 1
+    loc_data[loc_hash][0] += 1
 
     entry = {
         "type": "image",
-        "file": f"{task_id}{path.suffix}",
+        "file": f"{img_hash}{path.suffix}",
         "url": url,
         "width": 0,
         "height": 0,
         "split": "",
         "annotations": {"boxes": []},
     }
+    task["entry"] = entry
 
     label = task.get("label")
     if label is not None:
-        total_pos += len(label)
-        loc_data[loc_hash]["pos"] += len(label)
+        loc_data[loc_hash][1] += len(label)
 
         entry["width"] = label[0]["original_width"]
         entry["height"] = label[0]["original_height"]
@@ -62,25 +68,14 @@ for task in tqdm(tasks):
         image = Image.open(BytesIO(resp.content))
         entry["width"], entry["height"] = image.size
 
-    task["entry"] = entry
-
-mapping = greedy_loc_split(len(tasks), total_pos, loc_data, (0.7, 0.15, 0.15), (1, 3))
+mapping = greedy_loc_split(loc_data, SPLIT_RATIO, GAIN_WEIGHTS)
 
 with open(DATASET_PATH, "w", encoding="utf-8") as f:
-    config = {
-        "type": "dataset",
-        "task": "detect",
-        "name": "WildlifeCV",
-        "class_names": {"0": "snow_leopard"},
-        "version": 1,
-    }
-
-    json.dump(config, f)
-    f.write("\n")
+    json.dump(YOLO_CONF, f)
 
     for task in tasks:
         entry = task["entry"]
         entry["split"] = mapping[task["loc_hash"]]
 
-        json.dump(entry, f, ensure_ascii=False)
         f.write("\n")
+        json.dump(entry, f, ensure_ascii=False)
