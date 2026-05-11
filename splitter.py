@@ -1,68 +1,69 @@
-from collections import defaultdict
 from copy import deepcopy
-
-POS_RATE = 0.49
 
 
 def calculate_cost(candidate, target_samples, target_pos, weights):
-    cost = 0
+    cost = 0.0
+
     for i in range(3):
-        s = candidate[i]['total']
-        p = candidate[i]['pos']
+        s = candidate[i]["total"]
+        p = candidate[i]["pos"]
 
-        ts = target_samples[i]
-        tp = target_pos[i]
+        ts, tp = target_samples[i], target_pos[i]
 
+        # Штрафуем несоответствие размеру фолда
         cost += weights[0] * ((s - ts) / ts) ** 2
 
+        # Штрафуем дисбаланс позитивных сэмплов
         if tp > 0:
             cost += weights[1] * ((p - tp) / tp) ** 2
 
     return cost
 
 
-def greedy_loc_split(num_samples, location_data, split, weights):
-    target_samples = []
-    target_pos = []
+def greedy_loc_split(total_samples, total_pos, location_data, split, weights):
+    pos_rate = total_pos / total_samples
 
-    for i in range(3):
-        sample = num_samples * split[i]
-        target_samples.append(sample)
-        target_pos.append(sample * POS_RATE)
+    target_samples = [total_samples * ratio for ratio in split]
+    target_pos = [ts * pos_rate for ts in target_samples]
 
-    locations = list(location_data)
-    locations.sort(key=lambda name: location_data[name]['pos'], reverse=True)
+    # Сначала распределяем локации с наибольшим числом позитивных сэмплов
+    locations = sorted(location_data.items(), key=lambda x: x[1]["pos"], reverse=True)
 
-    mapping = defaultdict()
-    state = [{'total': 0, 'pos': 0, 'count': 0} for _ in range(3)]
-    for loc in locations:
-        n_samples = location_data[loc]['total']
-        n_pos = location_data[loc]['pos']
+    folds = [{"total": 0, "pos": 0, "count": 0} for _ in range(3)]
+
+    mapping = {}
+    fold_names = ["train", "val", "test"]
+
+    # Для каждой локации пробуем положить её по очереди в каждый фолд
+    for loc_name, data in locations:
+        n_samples = data["total"]
+        n_pos = data["pos"]
 
         best_fold = None
-        best_cost = float('inf')
+        best_cost = float("inf")
 
         for i in range(3):
-            candidate = deepcopy(state)
-            candidate[i]['total'] += n_samples
-            candidate[i]['pos'] += n_pos
-
-            # maintains location diversity inside split
+            # Ограничение: пропускаем фолд, если локация занимает более четверти его объёма
             if n_samples > target_samples[i] * 0.25:
                 continue
 
+            candidate = deepcopy(folds)
+            candidate[i]["total"] += n_samples
+            candidate[i]["pos"] += n_pos
+
+            # Находим штраф при использовании такого варианта распределения
             cost = calculate_cost(candidate, target_samples, target_pos, weights)
 
             if cost < best_cost:
                 best_cost = cost
                 best_fold = i
 
-        fold_name = ['train', 'val', 'test'][best_fold]
-        mapping[loc] = fold_name
+        # Выбираем фолд, при попадании в который локация минимизирует штраф
+        mapping[loc_name] = fold_names[best_fold]
 
-        state[best_fold]['total'] += n_samples
-        state[best_fold]['pos'] += n_pos
-        state[best_fold]['count'] += 1
+        folds[best_fold]["total"] += n_samples
+        folds[best_fold]["pos"] += n_pos
+        folds[best_fold]["count"] += 1
 
-    print(state)
-    return dict(mapping)
+    print(folds)
+    return mapping
